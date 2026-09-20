@@ -583,4 +583,68 @@ describe("honcho sync", () => {
     const messageRequests = requestsMatching(requests, "/messages").filter((r) => r.method === "POST");
     expect(messageRequests).toHaveLength(0);
   });
+
+  // TE-4ywqwk retroactive review. The first cut of this gate dropped blocked messages but still
+  // advanced the cursor from resources.comments.at(-1), recording content that is NOT in Honcho as
+  // synced — the next sync skipped past it and a later policy fix could never recover it.
+  it("does NOT advance the comment cursor past a B4-blocked comment", async () => {
+    installFetchMock({
+      dlpGatewayResponse: { allowed: false, reason: "blocked: high-sensitivity entity GUILD_CREDENTIAL", category: "GUILD_CREDENTIAL" },
+    });
+    const harness = createHonchoHarness({
+      config: { dlpGatewayUrl: "http://dlp-check-plugin-reach:8710", dlpGatewayToken: "dlp-t" },
+    });
+
+    await plugin.definition.setup(harness.ctx);
+    await harness.emit("issue.comment.created", { commentId: "c_2" }, {
+      entityId: "iss_1",
+      entityType: "issue",
+      companyId: "co_1",
+    });
+
+    const state = harness.getState({
+      scopeKind: "issue",
+      scopeId: "iss_1",
+      namespace: "honcho",
+      stateKey: "issue-sync-status",
+    }) as Record<string, unknown> | undefined;
+    expect(state?.lastSyncedCommentId ?? null).toBeNull();
+  });
+
+  it("still advances the comment cursor normally when the gate allows", async () => {
+    installFetchMock({ dlpGatewayResponse: { allowed: true, reason: "clean" } });
+    const harness = createHonchoHarness({
+      config: { dlpGatewayUrl: "http://dlp-check-plugin-reach:8710", dlpGatewayToken: "dlp-t" },
+    });
+
+    await plugin.definition.setup(harness.ctx);
+    await harness.emit("issue.comment.created", { commentId: "c_2" }, {
+      entityId: "iss_1",
+      entityType: "issue",
+      companyId: "co_1",
+    });
+
+    const state = harness.getState({
+      scopeKind: "issue",
+      scopeId: "iss_1",
+      namespace: "honcho",
+      stateKey: "issue-sync-status",
+    }) as Record<string, unknown>;
+    expect(state.lastSyncedCommentId).toBe("c_2");
+  });
+
+  it("warns instead of staying silent when the B4 gate is not configured", async () => {
+    installFetchMock();
+    const harness = createHonchoHarness();
+    const warn = vi.spyOn(harness.ctx.logger, "warn");
+
+    await plugin.definition.setup(harness.ctx);
+    await harness.emit("issue.comment.created", { commentId: "c_2" }, {
+      entityId: "iss_1",
+      entityType: "issue",
+      companyId: "co_1",
+    });
+
+    expect(warn.mock.calls.some(([message]) => String(message).includes("B4 DLP gate is NOT configured"))).toBe(true);
+  });
 });
