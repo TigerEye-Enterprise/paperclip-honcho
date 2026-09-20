@@ -134,7 +134,11 @@ describe("honcho tools", () => {
     expect(representationRequests[1]?.body).not.toHaveProperty("target");
   });
 
-  it("does not register honcho_ask_peer when peer chat is disabled", async () => {
+  it("returns a disabled error from honcho_ask_peer when peer chat is disabled", async () => {
+    // Tool registration is unconditional (upstream PR #17: setup() no longer reads config
+    // eagerly, so it cannot decide at registration time which tools to expose). The
+    // enablePeerChat check moved inside the handler instead — same policy, later enforcement
+    // point, {error: ...} rather than a missing registration.
     installFetchMock();
     const harness = createHonchoHarness({
       config: {
@@ -144,14 +148,12 @@ describe("honcho tools", () => {
 
     await plugin.definition.setup(harness.ctx);
 
-    await expect(
-      harness.executeTool("honcho_ask_peer", { targetPeerId: firstAgentPeerId, query: "Status?", issueId: "iss_1" }, {
-        companyId: "co_1",
-        projectId: "proj_1",
-        agentId: "agent_1",
-        runId: "run_1",
-      }),
-    ).rejects.toThrow("No tool handler registered");
+    const result = await harness.executeTool<{ error?: string }>(
+      "honcho_ask_peer",
+      { targetPeerId: firstAgentPeerId, query: "Status?", issueId: "iss_1" },
+      { companyId: "co_1", projectId: "proj_1", agentId: "agent_1", runId: "run_1" },
+    );
+    expect(result.error).toMatch(/peer chat is disabled/i);
   });
 
   it("registers and executes honcho_ask_peer when peer chat is enabled", async () => {

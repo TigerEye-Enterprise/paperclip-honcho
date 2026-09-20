@@ -1,6 +1,7 @@
 import {
   definePlugin,
   runWorker,
+  type PluginContext,
   type ToolRunContext,
   type ToolResult,
 } from "@paperclipai/plugin-sdk";
@@ -46,10 +47,17 @@ function maybeBootstrapLocalHonchoConfig(config: HonchoResolvedConfig): void {
   bootstrapLocalHonchoConfig({ apiKey: config.honchoApiKey, baseUrl: config.honchoApiBaseUrl });
 }
 
+// Context: a shared variable to hold lazily-resolved config.
+// setFromContext() is called once a company-scoped context is available.
+let _lazyBootstrapDone = false;
+function lazyBootstrap(ctx: PluginContext, config: HonchoResolvedConfig): void {
+  if (_lazyBootstrapDone) return;
+  _lazyBootstrapDone = true;
+  maybeBootstrapLocalHonchoConfig(config);
+}
+
 const plugin = definePlugin({
   async setup(ctx) {
-    const initialConfig = await getResolvedConfig(ctx);
-    maybeBootstrapLocalHonchoConfig(initialConfig);
     for (const launcher of RUNTIME_LAUNCHERS) {
       ctx.launchers.register(launcher);
     }
@@ -82,6 +90,7 @@ const plugin = definePlugin({
 
     ctx.actions.register(ACTION_KEYS.testConnection, async () => {
       const config = await getResolvedConfig(ctx);
+      lazyBootstrap(ctx, config);
       const validation = validateConfig(config);
       if (!validation.ok) {
         throw new Error(validation.errors?.join("; ") ?? "Honcho config is invalid");
@@ -131,6 +140,8 @@ const plugin = definePlugin({
       const companyId = await consumePreparedJobCompany(ctx, JOB_KEYS.initializeMemory)
         ?? (await ctx.companies.list({ limit: 1, offset: 0 }))[0]?.id;
       if (!companyId) throw new Error("No company available to initialize memory");
+      const config = await getResolvedConfig(ctx);
+      lazyBootstrap(ctx, config);
       await initializeMemory(ctx, companyId);
     });
 
@@ -239,8 +250,7 @@ const plugin = definePlugin({
       },
     );
 
-    if (initialConfig.enablePeerChat) {
-      ctx.tools.register(
+    ctx.tools.register(
         TOOL_NAMES.askPeer,
         manifest.tools?.find((tool) => tool.name === TOOL_NAMES.askPeer) ?? {
           displayName: "Honcho Ask Peer",
@@ -249,6 +259,7 @@ const plugin = definePlugin({
         },
         async (params, runCtx): Promise<ToolResult> => {
           const config = await getResolvedConfig(ctx);
+          lazyBootstrap(ctx, config);
           if (!config.enablePeerChat) {
             return { error: "Honcho peer chat is disabled in plugin config" };
           }
@@ -270,7 +281,6 @@ const plugin = definePlugin({
           };
         },
       );
-    }
 
     ctx.tools.register(
       TOOL_NAMES.getWorkspaceContext,
