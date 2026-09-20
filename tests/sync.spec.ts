@@ -584,10 +584,11 @@ describe("honcho sync", () => {
     expect(messageRequests).toHaveLength(0);
   });
 
-  // TE-4ywqwk retroactive review. The first cut of this gate dropped blocked messages but still
-  // advanced the cursor from resources.comments.at(-1), recording content that is NOT in Honcho as
-  // synced — the next sync skipped past it and a later policy fix could never recover it.
-  it("does NOT advance the comment cursor past a B4-blocked comment", async () => {
+  // TE-4ywqwk retroactive review. The cursor advances past B4-blocked content (same convention as
+  // noise/blank-filtered comments — holding it back either stalls the issue forever on a true
+  // positive or re-appends every later comment on each sync). What must never happen is the status
+  // silently claiming that withheld content was synced, so the blocked ids are recorded.
+  it("records B4-blocked comment ids in the sync status instead of silently claiming them synced", async () => {
     installFetchMock({
       dlpGatewayResponse: { allowed: false, reason: "blocked: high-sensitivity entity GUILD_CREDENTIAL", category: "GUILD_CREDENTIAL" },
     });
@@ -607,8 +608,31 @@ describe("honcho sync", () => {
       scopeId: "iss_1",
       namespace: "honcho",
       stateKey: "issue-sync-status",
-    }) as Record<string, unknown> | undefined;
-    expect(state?.lastSyncedCommentId ?? null).toBeNull();
+    }) as Record<string, unknown>;
+    // Every comment on the fixture issue was blocked, so all of them must be named as withheld.
+    expect(state.dlpBlockedCommentIds).toEqual(expect.arrayContaining(["c_1", "c_2"]));
+  });
+
+  it("clears a stale blocked record once the gate allows again", async () => {
+    installFetchMock({ dlpGatewayResponse: { allowed: true, reason: "clean" } });
+    const harness = createHonchoHarness({
+      config: { dlpGatewayUrl: "http://dlp-check-plugin-reach:8710", dlpGatewayToken: "dlp-t" },
+    });
+
+    await plugin.definition.setup(harness.ctx);
+    await harness.emit("issue.comment.created", { commentId: "c_2" }, {
+      entityId: "iss_1",
+      entityType: "issue",
+      companyId: "co_1",
+    });
+
+    const state = harness.getState({
+      scopeKind: "issue",
+      scopeId: "iss_1",
+      namespace: "honcho",
+      stateKey: "issue-sync-status",
+    }) as Record<string, unknown>;
+    expect(state.dlpBlockedCommentIds).toEqual([]);
   });
 
   it("still advances the comment cursor normally when the gate allows", async () => {

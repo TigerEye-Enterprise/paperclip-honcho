@@ -1028,6 +1028,12 @@ async function ensureMigrationCandidateImported(
       // record content that is not in Honcho as synced — losing it permanently and making the
       // "next run retries it" behaviour below impossible. No import-ledger write either, so a
       // since-fixed gateway/policy can still let the same content through on a later run.
+      //
+      // This is the OPPOSITE of what syncIssue does for the same block (advance-and-record). Not
+      // an inconsistency: this path dedups per-item via the import ledger + session-provenance
+      // cache, not a linear cursor, so retrying here costs nothing and duplicates nothing. syncIssue
+      // has no equivalent — holding its cursor back either stalls the issue or re-appends every
+      // later comment on each sync, which is why it advances and records instead.
       return { imported: false, skipped: true, blocked: true };
     }
     await client.appendMessages(companyId, issue.id, [dlpFiltered]);
@@ -1478,33 +1484,22 @@ export async function syncIssue(
         await client.ensureIssueSession(resources.issue, resources.company);
       }
 
-      // Advance the comment cursor only as far as the LAST comment before the first B4-blocked one.
-      // Taking resources.comments.at(-1) unconditionally would record a blocked comment as synced:
-      // it is not in Honcho and never will be, the next sync would skip straight past it, and a
-      // later policy/gateway fix could never recover it. Stopping short means a blocked comment is
-      // re-offered to the gate on the next sync, which is the recoverable behaviour a security
-      // boundary needs (TE-4ywqwk review).
-      const firstBlockedCommentIndex = dlp.blockedCommentIds.size > 0
-        ? resources.comments.findIndex((comment) => dlp.blockedCommentIds.has(comment.id))
-        : -1;
-      const syncableComments = firstBlockedCommentIndex >= 0
-        ? resources.comments.slice(0, firstBlockedCommentIndex)
-        : resources.comments;
-      const lastComment = syncableComments.at(-1) ?? null;
-      const lastDocumentRevision = resources.documents
-        .filter((bundle) => !dlp.blockedDocumentKeys.has(bundle.document.key))
-        .flatMap((bundle) => bundle.revisions)
-        .sort(compareRevisions)
-        .at(-1) ?? null;
+      // B4-blocked content advances the cursor, exactly like noise/blank-filtered comments already
+      // do. Holding the cursor back instead was tried and is WRONG in both directions: stopping at
+      // the first block stalls the issue forever on a true positive, and skipping only the blocked
+      // one re-appends every LATER comment on every subsequent sync (unbounded duplicates — the
+      // event path has no session-provenance dedup, unlike the migration path).
+      // What must not happen is the status silently claiming blocked content is synced, so the
+      // withheld ids are recorded below. Recovery after a false positive is replayIssue().
+      const lastComment = resources.comments.at(-1) ?? null;
+      const lastDocumentRevision = resources.documents.flatMap((bundle) => bundle.revisions).sort(compareRevisions).at(-1) ?? null;
       // Every document currently on the issue has its latest revision in Honcho
       // after a successful append (freshly synced this pass, or synced earlier
       // and skipped). Record each document's revision id so the next sync only
-      // re-emits documents whose revision actually changed. A document with any
-      // B4-blocked section is excluded for the same reason as blocked comments.
+      // re-emits documents whose revision actually changed.
       const nextSyncedDocumentRevisions: Record<string, string> = { ...resolveSyncedDocumentRevisions(status) };
       if (config.syncIssueDocuments) {
         for (const bundle of resources.documents) {
-          if (dlp.blockedDocumentKeys.has(bundle.document.key)) continue;
           for (const revision of bundle.revisions) {
             nextSyncedDocumentRevisions[bundle.document.key] = revision.id;
           }
@@ -1523,6 +1518,10 @@ export async function syncIssue(
         latestAppendAt: allMessages.length > 0 ? new Date().toISOString() : status.latestAppendAt,
         latestContextPreview: context.preview,
         latestContextFetchedAt: new Date().toISOString(),
+        // Always written, including the empty case, so a sync that clears a previous block does
+        // not leave a stale "still withheld" record behind.
+        dlpBlockedCommentIds: [...dlp.blockedCommentIds],
+        dlpBlockedDocumentKeys: [...dlp.blockedDocumentKeys],
       });
       await patchCompanySyncStatus(ctx, companyId, {
         connectionStatus: "connected",
