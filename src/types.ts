@@ -99,6 +99,15 @@ export type IssueSyncStatus = {
   latestPromptContextPreview: string | null;
   latestPromptContextBuiltAt: string | null;
   latestHierarchyContextPreview?: string | null;
+  // B4 DLP (TE-4ywqwk). Content the gate refused on the most recent sync. The cursors above
+  // DO advance past these — same convention as noise/blank-filtered comments, so a blocked
+  // comment neither stalls the issue nor causes the comments after it to be re-appended on
+  // every subsequent sync. Recording the ids is what keeps the status honest: without them
+  // the cursor would silently claim content is in Honcho that was deliberately withheld.
+  // Recovery after a false positive is the existing replayIssue(), which clears this status
+  // and re-offers the whole issue to the gate.
+  dlpBlockedCommentIds?: string[];
+  dlpBlockedDocumentKeys?: string[];
 };
 
 export type InitializationReport = {
