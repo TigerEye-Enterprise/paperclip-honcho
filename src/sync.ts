@@ -114,18 +114,47 @@ function compareComments(left: IssueComment, right: IssueComment): number {
 }
 
 /**
+ * What the B4 gate did to a batch of messages. `blockedCommentIds` / `blockedDocumentKeys` exist so
+ * callers can refuse to advance a sync cursor past content that was never written — recording
+ * blocked content as "synced" both loses it permanently and makes the stored status lie.
+ */
+type DlpFilterResult = {
+  kept: HonchoMessageInput[];
+  blockedCommentIds: Set<string>;
+  blockedDocumentKeys: Set<string>;
+};
+
+function emptyDlpFilterResult(kept: HonchoMessageInput[]): DlpFilterResult {
+  return { kept, blockedCommentIds: new Set(), blockedDocumentKeys: new Set() };
+}
+
+/**
  * B4 gate on the write path (TE-4ywqwk). Runs each message through the shared DLP gateway before it
  * reaches Honcho; a message the gateway blocks is DROPPED (never appended, never silently passed
  * through), and one it redacts is rewritten in place. ctx.logger.warn records every drop so a blocked
  * comment/document section is visible in plugin logs, not just absent.
+ *
+ * When no gateway is configured the gate does not run. That is a legitimate operator opt-out, but it
+ * is NOT silent: writing to long-term memory with the B4 boundary disabled is warned on every batch,
+ * because an absent security control that logs nothing is indistinguishable from one that works
+ * (SO-BESPOKE-CODE-FOUR-TYPE-TAXONOMY-001 type C).
  */
 async function filterMessagesThroughDlp(
   ctx: PluginContext,
   config: HonchoResolvedConfig,
   messages: HonchoMessageInput[],
-): Promise<HonchoMessageInput[]> {
-  if (!config.dlpGatewayUrl || messages.length === 0) return messages;
+): Promise<DlpFilterResult> {
+  if (messages.length === 0) return emptyDlpFilterResult(messages);
+  if (!config.dlpGatewayUrl) {
+    ctx.logger.warn(
+      "Honcho B4 DLP gate is NOT configured (dlpGatewayUrl empty) — writing to long-term memory with the B4 boundary disabled",
+      { messages: messages.length },
+    );
+    return emptyDlpFilterResult(messages);
+  }
   const kept: HonchoMessageInput[] = [];
+  const blockedCommentIds = new Set<string>();
+  const blockedDocumentKeys = new Set<string>();
   for (const message of messages) {
     const result = await checkMemoryWrite(
       (url, init) => ctx.http.fetch(url, init),
@@ -134,14 +163,24 @@ async function filterMessagesThroughDlp(
       config.dlpDefaultGuild,
     );
     if (!result.allowed) {
-      ctx.logger.warn("Honcho B4 DLP blocked a memory write", { reason: result.reason, category: result.category });
+      const metadata = (message.metadata ?? {}) as Record<string, unknown>;
+      const commentId = typeof metadata.commentId === "string" ? metadata.commentId : null;
+      const documentKey = typeof metadata.documentKey === "string" ? metadata.documentKey : null;
+      if (commentId) blockedCommentIds.add(commentId);
+      if (documentKey) blockedDocumentKeys.add(documentKey);
+      ctx.logger.warn("Honcho B4 DLP blocked a memory write", {
+        reason: result.reason,
+        category: result.category,
+        commentId,
+        documentKey,
+      });
       continue;
     }
     kept.push(result.redactedContent && result.redactedContent !== message.content
       ? { ...message, content: result.redactedContent }
       : message);
   }
-  return kept;
+  return { kept, blockedCommentIds, blockedDocumentKeys };
 }
 
 function compareRevisions(left: DocumentRevision, right: DocumentRevision): number {
@@ -920,7 +959,7 @@ async function ensureMigrationCandidateImported(
   config: HonchoResolvedConfig,
   client: Awaited<ReturnType<typeof createHonchoClient>>,
   sessionProvenanceCache: Map<string, Set<string>>,
-) {
+): Promise<{ imported: boolean; skipped: boolean; blocked?: boolean }> {
   const externalId = candidate.sourceType === "issue_comments"
     ? `paperclip:comment:${candidate.sourceId}`
     : candidate.sourceType === "issue_documents"
@@ -977,17 +1016,19 @@ async function ensureMigrationCandidateImported(
     await ensureActorPeer(ctx, companyId, actor, client);
     await ensureActorPeerMapping(ctx, companyId, actor);
 
-    const [dlpFiltered] = await filterMessagesThroughDlp(ctx, config, [{
+    const [dlpFiltered] = (await filterMessagesThroughDlp(ctx, config, [{
       content: candidate.content,
       peerId: await resolvePeerIdFromActor(ctx, companyId, actor),
       createdAt: candidate.createdAt,
       metadata: candidate.metadata as HonchoMessageInput["metadata"],
-    }]);
+    }])).kept;
     if (!dlpFiltered) {
-      // B4 blocked this candidate. No import-ledger write: leaving it unrecorded means the next
-      // migration-import run retries it (content unchanged, so a since-fixed gateway/policy would
-      // then let it through) rather than permanently silently dropping it.
-      return { imported: false, skipped: true };
+      // B4 blocked this candidate. Report it as BLOCKED, not merely skipped: the caller advances
+      // the issue's event-sync cursor for every non-blocked outcome, and doing that here would
+      // record content that is not in Honcho as synced — losing it permanently and making the
+      // "next run retries it" behaviour below impossible. No import-ledger write either, so a
+      // since-fixed gateway/policy can still let the same content through on a later run.
+      return { imported: false, skipped: true, blocked: true };
     }
     await client.appendMessages(companyId, issue.id, [dlpFiltered]);
 
@@ -1213,7 +1254,11 @@ export async function importMigrationPreview(ctx: PluginContext, companyId: stri
       }
       // Imported or skipped-because-already-present both mean this content is
       // in Honcho, so it should count toward advancing the issue's sync cursor.
-      recordCoveredCandidate(candidate);
+      // A B4-BLOCKED candidate means the opposite — it is not in Honcho — so it must not
+      // advance the cursor (TE-4ywqwk review).
+      if (!result.blocked) {
+        recordCoveredCandidate(candidate);
+      }
     } catch (error) {
       failed += 1;
       firstError ??= error instanceof Error ? error.message : String(error);
@@ -1425,22 +1470,41 @@ export async function syncIssue(
       const documentMessages = config.syncIssueDocuments
         ? await buildDocumentMessages(ctx, resources.issue, resources.documents, config, replay, resolveSyncedDocumentRevisions(status))
         : [];
-      const allMessages = await filterMessagesThroughDlp(ctx, config, [...commentMessages, ...documentMessages]);
+      const dlp = await filterMessagesThroughDlp(ctx, config, [...commentMessages, ...documentMessages]);
+      const allMessages = dlp.kept;
       if (allMessages.length > 0) {
         await client.appendMessages(resources.issue.companyId, resources.issue.id, allMessages);
       } else {
         await client.ensureIssueSession(resources.issue, resources.company);
       }
 
-      const lastComment = resources.comments.at(-1) ?? null;
-      const lastDocumentRevision = resources.documents.flatMap((bundle) => bundle.revisions).sort(compareRevisions).at(-1) ?? null;
+      // Advance the comment cursor only as far as the LAST comment before the first B4-blocked one.
+      // Taking resources.comments.at(-1) unconditionally would record a blocked comment as synced:
+      // it is not in Honcho and never will be, the next sync would skip straight past it, and a
+      // later policy/gateway fix could never recover it. Stopping short means a blocked comment is
+      // re-offered to the gate on the next sync, which is the recoverable behaviour a security
+      // boundary needs (TE-4ywqwk review).
+      const firstBlockedCommentIndex = dlp.blockedCommentIds.size > 0
+        ? resources.comments.findIndex((comment) => dlp.blockedCommentIds.has(comment.id))
+        : -1;
+      const syncableComments = firstBlockedCommentIndex >= 0
+        ? resources.comments.slice(0, firstBlockedCommentIndex)
+        : resources.comments;
+      const lastComment = syncableComments.at(-1) ?? null;
+      const lastDocumentRevision = resources.documents
+        .filter((bundle) => !dlp.blockedDocumentKeys.has(bundle.document.key))
+        .flatMap((bundle) => bundle.revisions)
+        .sort(compareRevisions)
+        .at(-1) ?? null;
       // Every document currently on the issue has its latest revision in Honcho
       // after a successful append (freshly synced this pass, or synced earlier
       // and skipped). Record each document's revision id so the next sync only
-      // re-emits documents whose revision actually changed.
+      // re-emits documents whose revision actually changed. A document with any
+      // B4-blocked section is excluded for the same reason as blocked comments.
       const nextSyncedDocumentRevisions: Record<string, string> = { ...resolveSyncedDocumentRevisions(status) };
       if (config.syncIssueDocuments) {
         for (const bundle of resources.documents) {
+          if (dlp.blockedDocumentKeys.has(bundle.document.key)) continue;
           for (const revision of bundle.revisions) {
             nextSyncedDocumentRevisions[bundle.document.key] = revision.id;
           }
@@ -1467,11 +1531,16 @@ export async function syncIssue(
         lastSuccessfulSyncAt: new Date().toISOString(),
         lastError: null,
       });
+      // Report what was actually WRITTEN, not what was built: with the B4 gate on, the pre-DLP
+      // counts over-report every blocked comment/section as synced.
+      const keptCommentCount = allMessages.filter(
+        (m) => typeof (m.metadata as Record<string, unknown> | undefined)?.commentId === "string",
+      ).length;
       return {
         issueId: resources.issue.id,
         issueIdentifier: resources.issue.identifier ?? null,
-        syncedComments: commentMessages.length,
-        syncedDocumentSections: documentMessages.length,
+        syncedComments: keptCommentCount,
+        syncedDocumentSections: allMessages.length - keptCommentCount,
         syncedRuns: 0,
         lastSyncedCommentId: lastComment?.id ?? null,
         lastSyncedRunId: null,
