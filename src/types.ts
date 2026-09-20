@@ -26,6 +26,9 @@ export type HonchoPluginConfig = {
   useLocalHonchoConfig?: boolean;
   bootstrapLocalHonchoConfig?: boolean;
   agentRuntimeHomePathTemplate?: string;
+  dlpGatewayUrl?: string;
+  dlpGatewayToken?: string;
+  dlpDefaultGuild?: string;
 };
 
 export type HonchoResolvedConfig = {
@@ -45,6 +48,14 @@ export type HonchoResolvedConfig = {
   useLocalHonchoConfig: boolean;
   bootstrapLocalHonchoConfig: boolean;
   agentRuntimeHomePathTemplate: string;
+  /** B4 gateway base (SO-CONTEXT-SANITIZATION-BOUNDARY-001). Empty = gate skipped (not configured). */
+  dlpGatewayUrl: string;
+  dlpGatewayToken: string;
+  /** Best-effort guild label passed to the B4 gateway's OPA policy; this plugin has no native guild
+   *  concept (Paperclip's company/issue model is guild-agnostic), so this is an operator-set default
+   *  rather than a derived value. Non-financial default keeps the conservative (denies-on-any-
+   *  high-sensitivity-entity) policy branch active for content this plugin can't attribute to a guild. */
+  dlpDefaultGuild: string;
 };
 
 export type MigrationSourceType =

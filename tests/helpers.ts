@@ -27,6 +27,9 @@ export const BASE_CONFIG = {
   useLocalHonchoConfig: true,
   bootstrapLocalHonchoConfig: false,
   agentRuntimeHomePathTemplate: "",
+  dlpGatewayUrl: "",
+  dlpGatewayToken: "",
+  dlpDefaultGuild: "devex",
 };
 
 export type SeedOverrides = {
@@ -75,6 +78,8 @@ type FetchMockOptions = {
   chatText?: string;
   workspaceResponse?: Record<string, unknown>;
   existingSessionMessages?: Record<string, Array<Record<string, unknown>>>;
+  /** Response body for POST .../check/memory_write when the B4 gate is configured. Defaults to allow. */
+  dlpGatewayResponse?: Record<string, unknown>;
 };
 
 function matchesPattern(url: string, pattern: string | RegExp): boolean {
@@ -172,6 +177,9 @@ export function installFetchMock(options: FetchMockOptions = {}) {
       }
     }
 
+    if (url.includes("/check/memory_write")) {
+      return new Response(JSON.stringify(options.dlpGatewayResponse ?? { allowed: true, reason: "clean" }), { status: 200 });
+    }
     if (url.endsWith("/v3/workspaces")) {
       return new Response(JSON.stringify(options.workspaceResponse ?? { ok: true }), { status: 200 });
     }
