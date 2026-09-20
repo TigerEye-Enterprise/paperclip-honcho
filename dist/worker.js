@@ -3401,7 +3401,7 @@ function maybeBootstrapLocalHonchoConfig(config) {
   bootstrapLocalHonchoConfig({ apiKey: config.honchoApiKey, baseUrl: config.honchoApiBaseUrl });
 }
 var _lazyBootstrapDone = false;
-function lazyBootstrap(ctx, config) {
+function lazyBootstrap(config) {
   if (_lazyBootstrapDone) return;
   _lazyBootstrapDone = true;
   maybeBootstrapLocalHonchoConfig(config);
@@ -3433,7 +3433,7 @@ var plugin = definePlugin({
     });
     ctx.actions.register(ACTION_KEYS.testConnection, async () => {
       const config = await getResolvedConfig(ctx);
-      lazyBootstrap(ctx, config);
+      lazyBootstrap(config);
       const validation = validateConfig(config);
       if (!validation.ok) {
         throw new Error(validation.errors?.join("; ") ?? "Honcho config is invalid");
@@ -3471,7 +3471,7 @@ var plugin = definePlugin({
       const companyId = await consumePreparedJobCompany(ctx, JOB_KEYS.initializeMemory) ?? (await ctx.companies.list({ limit: 1, offset: 0 }))[0]?.id;
       if (!companyId) throw new Error("No company available to initialize memory");
       const config = await getResolvedConfig(ctx);
-      lazyBootstrap(ctx, config);
+      lazyBootstrap(config);
       await initializeMemory(ctx, companyId);
     });
     ctx.events.on("issue.created", async (event) => {
@@ -3575,7 +3575,7 @@ var plugin = definePlugin({
       },
       async (params, runCtx) => {
         const config = await getResolvedConfig(ctx);
-        lazyBootstrap(ctx, config);
+        lazyBootstrap(config);
         if (!config.enablePeerChat) {
           return { error: "Honcho peer chat is disabled in plugin config" };
         }

@@ -1,7 +1,6 @@
 import {
   definePlugin,
   runWorker,
-  type PluginContext,
   type ToolRunContext,
   type ToolResult,
 } from "@paperclipai/plugin-sdk";
@@ -47,10 +46,17 @@ function maybeBootstrapLocalHonchoConfig(config: HonchoResolvedConfig): void {
   bootstrapLocalHonchoConfig({ apiKey: config.honchoApiKey, baseUrl: config.honchoApiBaseUrl });
 }
 
-// Context: a shared variable to hold lazily-resolved config.
-// setFromContext() is called once a company-scoped context is available.
+// setup() cannot read config (no company in scope there), so the one-shot local-honcho-config
+// bootstrap is deferred to the first handler that resolves config for a company.
+//
+// ⚠ Process-global by design and by limitation: it writes the single machine-wide
+// ~/.honcho/config.json, so once per worker process is the right cadence. Note the flag is set
+// before the config is consulted, so on a MULTI-company instance the first company to resolve
+// config decides for all of them. Harmless here (single company, and the underlying write never
+// overwrites an existing file) — flagged rather than changed because the behaviour is upstream
+// PR #17's, not ours, and altering it would deepen the fork for no gain we can measure.
 let _lazyBootstrapDone = false;
-function lazyBootstrap(ctx: PluginContext, config: HonchoResolvedConfig): void {
+function lazyBootstrap(config: HonchoResolvedConfig): void {
   if (_lazyBootstrapDone) return;
   _lazyBootstrapDone = true;
   maybeBootstrapLocalHonchoConfig(config);
@@ -90,7 +96,7 @@ const plugin = definePlugin({
 
     ctx.actions.register(ACTION_KEYS.testConnection, async () => {
       const config = await getResolvedConfig(ctx);
-      lazyBootstrap(ctx, config);
+      lazyBootstrap(config);
       const validation = validateConfig(config);
       if (!validation.ok) {
         throw new Error(validation.errors?.join("; ") ?? "Honcho config is invalid");
@@ -141,7 +147,7 @@ const plugin = definePlugin({
         ?? (await ctx.companies.list({ limit: 1, offset: 0 }))[0]?.id;
       if (!companyId) throw new Error("No company available to initialize memory");
       const config = await getResolvedConfig(ctx);
-      lazyBootstrap(ctx, config);
+      lazyBootstrap(config);
       await initializeMemory(ctx, companyId);
     });
 
@@ -259,7 +265,7 @@ const plugin = definePlugin({
         },
         async (params, runCtx): Promise<ToolResult> => {
           const config = await getResolvedConfig(ctx);
-          lazyBootstrap(ctx, config);
+          lazyBootstrap(config);
           if (!config.enablePeerChat) {
             return { error: "Honcho peer chat is disabled in plugin config" };
           }
