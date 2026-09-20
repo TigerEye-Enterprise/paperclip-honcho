@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import plugin from "../src/worker.js";
-import { createHonchoHarness } from "./helpers.js";
+import { createHonchoHarness, installFetchMock } from "./helpers.js";
 
 // Hermetic home directory so the test never touches the developer's real
 // ~/.honcho/config.json.
@@ -41,7 +41,12 @@ describe("bootstrapping the shared ~/.honcho/config.json", () => {
     expect(existsSync(sharedConfigPath())).toBe(false);
   });
 
-  it("writes the file on setup when the flag is on and no local config exists", async () => {
+  it("writes the file on the first config-consuming action after setup", async () => {
+    // Bootstrap runs lazily on first config resolution (upstream PR #17: the plugin no longer
+    // reads config eagerly in setup(), so a bare setup() call — as this test did before that
+    // fix — no longer touches ~/.honcho/config.json at all). test-connection is the lightest
+    // registered action that resolves config, so it's the trigger here.
+    installFetchMock();
     const harness = createHonchoHarness({
       config: {
         honchoApiBaseUrl: "http://127.0.0.1:8000",
@@ -51,6 +56,9 @@ describe("bootstrapping the shared ~/.honcho/config.json", () => {
     });
 
     await plugin.definition.setup(harness.ctx);
+    expect(existsSync(sharedConfigPath())).toBe(false);
+
+    await harness.performAction("test-connection", {});
 
     expect(existsSync(sharedConfigPath())).toBe(true);
     const written = JSON.parse(readFileSync(sharedConfigPath(), "utf8"));

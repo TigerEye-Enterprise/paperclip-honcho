@@ -1,6 +1,7 @@
 import {
   definePlugin,
   runWorker,
+  type PluginContext,
   type ToolRunContext,
   type ToolResult,
 } from "@paperclipai/plugin-sdk";
