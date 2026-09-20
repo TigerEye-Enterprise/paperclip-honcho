@@ -102,7 +102,10 @@ var DEFAULT_CONFIG = {
   flushBeforeReset: false,
   useLocalHonchoConfig: true,
   bootstrapLocalHonchoConfig: false,
-  agentRuntimeHomePathTemplate: ""
+  agentRuntimeHomePathTemplate: "",
+  dlpGatewayUrl: "",
+  dlpGatewayToken: "",
+  dlpDefaultGuild: "devex"
 };
 var ISSUE_STATUS_STATE_KEY = "issue-sync-status";
 var COMPANY_STATUS_STATE_KEY = "company-memory-status";
@@ -224,6 +227,23 @@ var manifest = {
         title: "Bootstrap Local Honcho Config",
         description: "Off by default: when a Honcho API key is configured above, write it to ~/.honcho/config.json if that file doesn't already exist, so Hermes/Claude Code/opencode on this box can reuse it too. Never overwrites an existing file. Only makes sense for a single-tenant, self-hosted Paperclip instance running on the same machine.",
         default: DEFAULT_CONFIG.bootstrapLocalHonchoConfig
+      },
+      dlpGatewayUrl: {
+        type: "string",
+        title: "B4 DLP Gateway URL",
+        description: "Base URL of a memory_write DLP gateway (Presidio NER + OPA policy) to check issue comments and document revisions against before they are written to Honcho. Leave blank to disable this gate.",
+        default: DEFAULT_CONFIG.dlpGatewayUrl
+      },
+      dlpGatewayToken: {
+        type: "string",
+        title: "B4 DLP Gateway Bearer Token",
+        default: DEFAULT_CONFIG.dlpGatewayToken
+      },
+      dlpDefaultGuild: {
+        type: "string",
+        title: "B4 DLP Guild Label",
+        description: "Label sent to the DLP gateway's policy engine for this company's content. This plugin has no native guild concept, so this is a fixed operator-set value.",
+        default: DEFAULT_CONFIG.dlpDefaultGuild
       }
     }
   },
@@ -483,7 +503,10 @@ function resolveConfig(config) {
     flushBeforeReset: normalizeBoolean(input.flushBeforeReset, DEFAULT_CONFIG.flushBeforeReset),
     useLocalHonchoConfig: normalizeBoolean(input.useLocalHonchoConfig, DEFAULT_CONFIG.useLocalHonchoConfig),
     bootstrapLocalHonchoConfig: normalizeBoolean(input.bootstrapLocalHonchoConfig, DEFAULT_CONFIG.bootstrapLocalHonchoConfig),
-    agentRuntimeHomePathTemplate: normalizeString(input.agentRuntimeHomePathTemplate, DEFAULT_CONFIG.agentRuntimeHomePathTemplate)
+    agentRuntimeHomePathTemplate: normalizeString(input.agentRuntimeHomePathTemplate, DEFAULT_CONFIG.agentRuntimeHomePathTemplate),
+    dlpGatewayUrl: normalizeString(input.dlpGatewayUrl, DEFAULT_CONFIG.dlpGatewayUrl),
+    dlpGatewayToken: normalizeString(input.dlpGatewayToken, DEFAULT_CONFIG.dlpGatewayToken),
+    dlpDefaultGuild: normalizeString(input.dlpDefaultGuild, DEFAULT_CONFIG.dlpDefaultGuild) || DEFAULT_CONFIG.dlpDefaultGuild
   };
 }
 async function getResolvedConfig(ctx) {
@@ -1573,6 +1596,44 @@ function buildSyncErrorSummary(input) {
   };
 }
 
+// src/dlp.ts
+async function checkMemoryWrite(httpFetch, config, content, guild) {
+  try {
+    const res = await httpFetch(`${config.dlpGatewayUrl.replace(/\/$/, "")}/check/memory_write`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${config.dlpGatewayToken}`
+      },
+      body: JSON.stringify({ content, guild })
+    });
+    if (!res) {
+      return { allowed: false, category: "gateway_error", reason: "B4 gateway returned no response -- fail-closed" };
+    }
+    if (!res.ok) {
+      return { allowed: false, category: "gateway_error", reason: `B4 gateway HTTP ${res.status} -- fail-closed` };
+    }
+    const body = await res.json();
+    if (typeof body?.allowed !== "boolean") {
+      return { allowed: false, category: "gateway_error", reason: "B4 gateway returned a malformed response -- fail-closed" };
+    }
+    if (!body.allowed) {
+      return { allowed: false, category: body.category ?? "blocked", reason: body.reason ?? "blocked by B4 gateway" };
+    }
+    return {
+      allowed: true,
+      redactedContent: typeof body.redacted_content === "string" ? body.redacted_content : content,
+      reason: body.reason ?? "clean"
+    };
+  } catch (error) {
+    return {
+      allowed: false,
+      category: "gateway_unreachable",
+      reason: `B4 gateway unreachable (${error instanceof Error ? error.message : String(error)}) -- fail-closed`
+    };
+  }
+}
+
 // src/provenance.ts
 function actorFromComment(comment) {
   if (comment.authorAgentId) {
@@ -1946,6 +2007,46 @@ async function resolvePeerIdFromActor(ctx, companyId, actor) {
 }
 function compareComments(left, right) {
   return new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+}
+function emptyDlpFilterResult(kept) {
+  return { kept, blockedCommentIds: /* @__PURE__ */ new Set(), blockedDocumentKeys: /* @__PURE__ */ new Set() };
+}
+async function filterMessagesThroughDlp(ctx, config, messages) {
+  if (messages.length === 0) return emptyDlpFilterResult(messages);
+  if (!config.dlpGatewayUrl) {
+    ctx.logger.warn(
+      "Honcho B4 DLP gate is NOT configured (dlpGatewayUrl empty) \u2014 writing to long-term memory with the B4 boundary disabled",
+      { messages: messages.length }
+    );
+    return emptyDlpFilterResult(messages);
+  }
+  const kept = [];
+  const blockedCommentIds = /* @__PURE__ */ new Set();
+  const blockedDocumentKeys = /* @__PURE__ */ new Set();
+  for (const message of messages) {
+    const result = await checkMemoryWrite(
+      (url, init) => ctx.http.fetch(url, init),
+      { dlpGatewayUrl: config.dlpGatewayUrl, dlpGatewayToken: config.dlpGatewayToken },
+      message.content,
+      config.dlpDefaultGuild
+    );
+    if (!result.allowed) {
+      const metadata = message.metadata ?? {};
+      const commentId = typeof metadata.commentId === "string" ? metadata.commentId : null;
+      const documentKey = typeof metadata.documentKey === "string" ? metadata.documentKey : null;
+      if (commentId) blockedCommentIds.add(commentId);
+      if (documentKey) blockedDocumentKeys.add(documentKey);
+      ctx.logger.warn("Honcho B4 DLP blocked a memory write", {
+        reason: result.reason,
+        category: result.category,
+        commentId,
+        documentKey
+      });
+      continue;
+    }
+    kept.push(result.redactedContent && result.redactedContent !== message.content ? { ...message, content: result.redactedContent } : message);
+  }
+  return { kept, blockedCommentIds, blockedDocumentKeys };
 }
 function compareRevisions(left, right) {
   return left.revisionNumber - right.revisionNumber;
@@ -2597,12 +2698,16 @@ async function ensureMigrationCandidateImported(ctx, companyId, candidate, confi
     };
     await ensureActorPeer(ctx, companyId, actor, client);
     await ensureActorPeerMapping(ctx, companyId, actor);
-    await client.appendMessages(companyId, issue.id, [{
+    const [dlpFiltered] = (await filterMessagesThroughDlp(ctx, config, [{
       content: candidate.content,
       peerId: await resolvePeerIdFromActor(ctx, companyId, actor),
       createdAt: candidate.createdAt,
       metadata: candidate.metadata
-    }]);
+    }])).kept;
+    if (!dlpFiltered) {
+      return { imported: false, skipped: true, blocked: true };
+    }
+    await client.appendMessages(companyId, issue.id, [dlpFiltered]);
     if (candidateProvenanceKey) {
       existingSessionProvenance.add(candidateProvenanceKey);
     }
@@ -2788,7 +2893,9 @@ async function importMigrationPreview(ctx, companyId) {
       } else {
         skipped += 1;
       }
-      recordCoveredCandidate(candidate);
+      if (!result.blocked) {
+        recordCoveredCandidate(candidate);
+      }
     } catch (error) {
       failed += 1;
       firstError ??= error instanceof Error ? error.message : String(error);
@@ -2964,7 +3071,8 @@ async function syncIssue(ctx, issueId, companyId, options = {}) {
       await ensureIssueTopology(ctx, resources, client, config);
       const commentMessages = config.syncIssueComments ? await buildCommentMessages(ctx, resources.issue, resources.comments, config, replay, replay ? null : status.lastSyncedCommentId) : [];
       const documentMessages = config.syncIssueDocuments ? await buildDocumentMessages(ctx, resources.issue, resources.documents, config, replay, resolveSyncedDocumentRevisions(status)) : [];
-      const allMessages = [...commentMessages, ...documentMessages];
+      const dlp = await filterMessagesThroughDlp(ctx, config, [...commentMessages, ...documentMessages]);
+      const allMessages = dlp.kept;
       if (allMessages.length > 0) {
         await client.appendMessages(resources.issue.companyId, resources.issue.id, allMessages);
       } else {
@@ -2992,7 +3100,11 @@ async function syncIssue(ctx, issueId, companyId, options = {}) {
         lastError: null,
         latestAppendAt: allMessages.length > 0 ? (/* @__PURE__ */ new Date()).toISOString() : status.latestAppendAt,
         latestContextPreview: context.preview,
-        latestContextFetchedAt: (/* @__PURE__ */ new Date()).toISOString()
+        latestContextFetchedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        // Always written, including the empty case, so a sync that clears a previous block does
+        // not leave a stale "still withheld" record behind.
+        dlpBlockedCommentIds: [...dlp.blockedCommentIds],
+        dlpBlockedDocumentKeys: [...dlp.blockedDocumentKeys]
       });
       await patchCompanySyncStatus(ctx, companyId, {
         connectionStatus: "connected",
@@ -3001,11 +3113,14 @@ async function syncIssue(ctx, issueId, companyId, options = {}) {
         lastSuccessfulSyncAt: (/* @__PURE__ */ new Date()).toISOString(),
         lastError: null
       });
+      const keptCommentCount = allMessages.filter(
+        (m) => typeof m.metadata?.commentId === "string"
+      ).length;
       return {
         issueId: resources.issue.id,
         issueIdentifier: resources.issue.identifier ?? null,
-        syncedComments: commentMessages.length,
-        syncedDocumentSections: documentMessages.length,
+        syncedComments: keptCommentCount,
+        syncedDocumentSections: allMessages.length - keptCommentCount,
         syncedRuns: 0,
         lastSyncedCommentId: lastComment?.id ?? null,
         lastSyncedRunId: null,

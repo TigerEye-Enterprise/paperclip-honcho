@@ -97,7 +97,10 @@ var DEFAULT_CONFIG = {
   flushBeforeReset: false,
   useLocalHonchoConfig: true,
   bootstrapLocalHonchoConfig: false,
-  agentRuntimeHomePathTemplate: ""
+  agentRuntimeHomePathTemplate: "",
+  dlpGatewayUrl: "",
+  dlpGatewayToken: "",
+  dlpDefaultGuild: "devex"
 };
 var ISSUE_STATUS_STATE_KEY = "issue-sync-status";
 var COMPANY_STATUS_STATE_KEY = "company-memory-status";

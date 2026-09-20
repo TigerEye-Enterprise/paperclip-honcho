@@ -55,7 +55,10 @@ var DEFAULT_CONFIG = {
   flushBeforeReset: false,
   useLocalHonchoConfig: true,
   bootstrapLocalHonchoConfig: false,
-  agentRuntimeHomePathTemplate: ""
+  agentRuntimeHomePathTemplate: "",
+  dlpGatewayUrl: "",
+  dlpGatewayToken: "",
+  dlpDefaultGuild: "devex"
 };
 
 // src/manifest.ts
@@ -173,6 +176,23 @@ var manifest = {
         title: "Bootstrap Local Honcho Config",
         description: "Off by default: when a Honcho API key is configured above, write it to ~/.honcho/config.json if that file doesn't already exist, so Hermes/Claude Code/opencode on this box can reuse it too. Never overwrites an existing file. Only makes sense for a single-tenant, self-hosted Paperclip instance running on the same machine.",
         default: DEFAULT_CONFIG.bootstrapLocalHonchoConfig
+      },
+      dlpGatewayUrl: {
+        type: "string",
+        title: "B4 DLP Gateway URL",
+        description: "Base URL of a memory_write DLP gateway (Presidio NER + OPA policy) to check issue comments and document revisions against before they are written to Honcho. Leave blank to disable this gate.",
+        default: DEFAULT_CONFIG.dlpGatewayUrl
+      },
+      dlpGatewayToken: {
+        type: "string",
+        title: "B4 DLP Gateway Bearer Token",
+        default: DEFAULT_CONFIG.dlpGatewayToken
+      },
+      dlpDefaultGuild: {
+        type: "string",
+        title: "B4 DLP Guild Label",
+        description: "Label sent to the DLP gateway's policy engine for this company's content. This plugin has no native guild concept, so this is a fixed operator-set value.",
+        default: DEFAULT_CONFIG.dlpDefaultGuild
       }
     }
   },

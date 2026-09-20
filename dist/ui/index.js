@@ -60,7 +60,10 @@ var DEFAULT_CONFIG = {
   flushBeforeReset: false,
   useLocalHonchoConfig: true,
   bootstrapLocalHonchoConfig: false,
-  agentRuntimeHomePathTemplate: ""
+  agentRuntimeHomePathTemplate: "",
+  dlpGatewayUrl: "",
+  dlpGatewayToken: "",
+  dlpDefaultGuild: "devex"
 };
 
 // src/deployment.ts
@@ -95,7 +98,10 @@ function normalizeSettingsConfig(configJson) {
     flushBeforeReset: typeof source.flushBeforeReset === "boolean" ? source.flushBeforeReset : DEFAULT_CONFIG.flushBeforeReset,
     useLocalHonchoConfig: typeof source.useLocalHonchoConfig === "boolean" ? source.useLocalHonchoConfig : DEFAULT_CONFIG.useLocalHonchoConfig,
     bootstrapLocalHonchoConfig: typeof source.bootstrapLocalHonchoConfig === "boolean" ? source.bootstrapLocalHonchoConfig : DEFAULT_CONFIG.bootstrapLocalHonchoConfig,
-    agentRuntimeHomePathTemplate: typeof source.agentRuntimeHomePathTemplate === "string" ? source.agentRuntimeHomePathTemplate : DEFAULT_CONFIG.agentRuntimeHomePathTemplate
+    agentRuntimeHomePathTemplate: typeof source.agentRuntimeHomePathTemplate === "string" ? source.agentRuntimeHomePathTemplate : DEFAULT_CONFIG.agentRuntimeHomePathTemplate,
+    dlpGatewayUrl: typeof source.dlpGatewayUrl === "string" ? source.dlpGatewayUrl.trim() : DEFAULT_CONFIG.dlpGatewayUrl,
+    dlpGatewayToken: typeof source.dlpGatewayToken === "string" ? source.dlpGatewayToken.trim() : DEFAULT_CONFIG.dlpGatewayToken,
+    dlpDefaultGuild: typeof source.dlpDefaultGuild === "string" && source.dlpDefaultGuild.trim() ? source.dlpDefaultGuild.trim() : DEFAULT_CONFIG.dlpDefaultGuild
   };
 }
 function getDeploymentMode(config) {
