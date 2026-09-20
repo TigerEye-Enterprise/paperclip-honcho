@@ -523,4 +523,64 @@ describe("honcho sync", () => {
     expect(requests.some((request) => JSON.stringify(request.body).includes("SEC-1"))).toBe(true);
   });
 
+  // TE-4ywqwk: the sync path must actually CALL the B4 gateway when configured, and block a comment
+  // it denies. The gate is a no-op when dlpGatewayUrl is unset (all other tests in this file cover
+  // that default path already), so these tests explicitly configure it.
+  it("calls the configured B4 gateway and blocks a comment it denies (never appended)", async () => {
+    const { requests } = installFetchMock({
+      dlpGatewayResponse: { allowed: false, reason: "blocked: high-sensitivity entity GUILD_CREDENTIAL", category: "GUILD_CREDENTIAL" },
+    });
+    const harness = createHonchoHarness({
+      config: { dlpGatewayUrl: "http://dlp-check-plugin-reach:8710", dlpGatewayToken: "dlp-t" },
+    });
+
+    await plugin.definition.setup(harness.ctx);
+    await harness.emit("issue.comment.created", { commentId: "c_2" }, {
+      entityId: "iss_1",
+      entityType: "issue",
+      companyId: "co_1",
+    });
+
+    expect(requestsMatching(requests, "/check/memory_write").length).toBeGreaterThan(0);
+    const messageRequests = requestsMatching(requests, "/messages").filter((r) => r.method === "POST");
+    expect(messageRequests).toHaveLength(0);
+  });
+
+  it("appends a comment the B4 gateway allows", async () => {
+    const { requests } = installFetchMock({
+      dlpGatewayResponse: { allowed: true, reason: "clean" },
+    });
+    const harness = createHonchoHarness({
+      config: { dlpGatewayUrl: "http://dlp-check-plugin-reach:8710", dlpGatewayToken: "dlp-t" },
+    });
+
+    await plugin.definition.setup(harness.ctx);
+    await harness.emit("issue.comment.created", { commentId: "c_2" }, {
+      entityId: "iss_1",
+      entityType: "issue",
+      companyId: "co_1",
+    });
+
+    expect(requestsMatching(requests, "/check/memory_write").length).toBeGreaterThan(0);
+    expect(requestsMatching(requests, "/messages").length).toBeGreaterThan(0);
+  });
+
+  it("fails closed (never appends) when the B4 gateway is unreachable", async () => {
+    const { requests } = installFetchMock({
+      failOn: ["/check/memory_write"],
+    });
+    const harness = createHonchoHarness({
+      config: { dlpGatewayUrl: "http://dlp-check-plugin-reach:8710", dlpGatewayToken: "dlp-t" },
+    });
+
+    await plugin.definition.setup(harness.ctx);
+    await harness.emit("issue.comment.created", { commentId: "c_2" }, {
+      entityId: "iss_1",
+      entityType: "issue",
+      companyId: "co_1",
+    });
+
+    const messageRequests = requestsMatching(requests, "/messages").filter((r) => r.method === "POST");
+    expect(messageRequests).toHaveLength(0);
+  });
 });

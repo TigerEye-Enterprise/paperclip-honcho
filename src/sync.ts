@@ -14,6 +14,7 @@ import {
   DEFAULT_SEARCH_LIMIT,
 } from "./constants.js";
 import { getResolvedConfig, validateConfig } from "./config.js";
+import { checkMemoryWrite } from "./dlp.js";
 import {
   bootstrapSessionIdForAgent,
   bootstrapSessionIdForCompany,
@@ -110,6 +111,37 @@ async function resolvePeerIdFromActor(
 
 function compareComments(left: IssueComment, right: IssueComment): number {
   return new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+}
+
+/**
+ * B4 gate on the write path (TE-4ywqwk). Runs each message through the shared DLP gateway before it
+ * reaches Honcho; a message the gateway blocks is DROPPED (never appended, never silently passed
+ * through), and one it redacts is rewritten in place. ctx.logger.warn records every drop so a blocked
+ * comment/document section is visible in plugin logs, not just absent.
+ */
+async function filterMessagesThroughDlp(
+  ctx: PluginContext,
+  config: HonchoResolvedConfig,
+  messages: HonchoMessageInput[],
+): Promise<HonchoMessageInput[]> {
+  if (!config.dlpGatewayUrl || messages.length === 0) return messages;
+  const kept: HonchoMessageInput[] = [];
+  for (const message of messages) {
+    const result = await checkMemoryWrite(
+      (url, init) => ctx.http.fetch(url, init),
+      { dlpGatewayUrl: config.dlpGatewayUrl, dlpGatewayToken: config.dlpGatewayToken },
+      message.content,
+      config.dlpDefaultGuild,
+    );
+    if (!result.allowed) {
+      ctx.logger.warn("Honcho B4 DLP blocked a memory write", { reason: result.reason, category: result.category });
+      continue;
+    }
+    kept.push(result.redactedContent && result.redactedContent !== message.content
+      ? { ...message, content: result.redactedContent }
+      : message);
+  }
+  return kept;
 }
 
 function compareRevisions(left: DocumentRevision, right: DocumentRevision): number {
@@ -945,12 +977,19 @@ async function ensureMigrationCandidateImported(
     await ensureActorPeer(ctx, companyId, actor, client);
     await ensureActorPeerMapping(ctx, companyId, actor);
 
-    await client.appendMessages(companyId, issue.id, [{
+    const [dlpFiltered] = await filterMessagesThroughDlp(ctx, config, [{
       content: candidate.content,
       peerId: await resolvePeerIdFromActor(ctx, companyId, actor),
       createdAt: candidate.createdAt,
       metadata: candidate.metadata as HonchoMessageInput["metadata"],
     }]);
+    if (!dlpFiltered) {
+      // B4 blocked this candidate. No import-ledger write: leaving it unrecorded means the next
+      // migration-import run retries it (content unchanged, so a since-fixed gateway/policy would
+      // then let it through) rather than permanently silently dropping it.
+      return { imported: false, skipped: true };
+    }
+    await client.appendMessages(companyId, issue.id, [dlpFiltered]);
 
     // Mark this source as present in the session immediately after the append
     // succeeds, before the (best-effort, scope-dependent) ledger write — so a
@@ -1386,7 +1425,7 @@ export async function syncIssue(
       const documentMessages = config.syncIssueDocuments
         ? await buildDocumentMessages(ctx, resources.issue, resources.documents, config, replay, resolveSyncedDocumentRevisions(status))
         : [];
-      const allMessages = [...commentMessages, ...documentMessages];
+      const allMessages = await filterMessagesThroughDlp(ctx, config, [...commentMessages, ...documentMessages]);
       if (allMessages.length > 0) {
         await client.appendMessages(resources.issue.companyId, resources.issue.id, allMessages);
       } else {

@@ -55,6 +55,9 @@ export function resolveConfig(config: HonchoPluginConfig | Record<string, unknow
     useLocalHonchoConfig: normalizeBoolean(input.useLocalHonchoConfig, DEFAULT_CONFIG.useLocalHonchoConfig),
     bootstrapLocalHonchoConfig: normalizeBoolean(input.bootstrapLocalHonchoConfig, DEFAULT_CONFIG.bootstrapLocalHonchoConfig),
     agentRuntimeHomePathTemplate: normalizeString(input.agentRuntimeHomePathTemplate, DEFAULT_CONFIG.agentRuntimeHomePathTemplate),
+    dlpGatewayUrl: normalizeString(input.dlpGatewayUrl, DEFAULT_CONFIG.dlpGatewayUrl),
+    dlpGatewayToken: normalizeString(input.dlpGatewayToken, DEFAULT_CONFIG.dlpGatewayToken),
+    dlpDefaultGuild: normalizeString(input.dlpDefaultGuild, DEFAULT_CONFIG.dlpDefaultGuild) || DEFAULT_CONFIG.dlpDefaultGuild,
   };
 }
 

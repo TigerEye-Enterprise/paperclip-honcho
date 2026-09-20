@@ -109,6 +109,9 @@ export const DEFAULT_CONFIG = {
   useLocalHonchoConfig: true,
   bootstrapLocalHonchoConfig: false,
   agentRuntimeHomePathTemplate: "",
+  dlpGatewayUrl: "",
+  dlpGatewayToken: "",
+  dlpDefaultGuild: "devex",
 } as const;
 
 export const ISSUE_STATUS_STATE_KEY = "issue-sync-status";
