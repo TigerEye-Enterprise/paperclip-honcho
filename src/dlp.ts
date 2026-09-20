@@ -23,17 +23,26 @@ export interface DlpCheckResult {
   redactedContent?: string;
 }
 
-export interface DlpGatewayResponse {
+/**
+ * Only the fields this client actually reads. The gateway also returns `action` and `policy_id`;
+ * they are deliberately NOT declared, because declaring them implies we branch on them and we do
+ * not -- `allowed` plus `redacted_content` fully determine what happens here.
+ */
+interface DlpGatewayResponse {
   allowed: boolean;
   reason: string;
   category?: string;
-  action?: string;
-  policy_id?: string;
   redacted_content?: string;
 }
 
 export interface DlpGatewayConfig {
-  /** B4 gateway base, e.g. http://dlp-check-plugin-reach:8710 (mesh -- never 0.0.0.0). Empty disables the gate (see checkMemoryWrite). */
+  /**
+   * B4 gateway base, e.g. http://dlp-check-plugin-reach:8710 (mesh -- never 0.0.0.0).
+   * An empty value disables the gate entirely; that check lives in the CALLER
+   * (sync.ts filterMessagesThroughDlp), which is the only place that can also emit the
+   * "writing to memory with no B4 gate" warning. Do not re-add it here -- a second copy
+   * was unreachable dead code.
+   */
   dlpGatewayUrl: string;
   /** Bearer for the B4 gateway. */
   dlpGatewayToken: string;
@@ -50,11 +59,6 @@ export async function checkMemoryWrite(
   content: string,
   guild: string,
 ): Promise<DlpCheckResult> {
-  if (!config.dlpGatewayUrl) {
-    // Gate not configured for this deployment -- explicit opt-out, not a silent gap: the operator
-    // must set dlpGatewayUrl for the gate to run at all. Logged by the caller.
-    return { allowed: true, reason: "B4 gateway not configured -- gate skipped" };
-  }
   try {
     const res = await httpFetch(`${config.dlpGatewayUrl.replace(/\/$/, "")}/check/memory_write`, {
       method: "POST",
@@ -64,6 +68,12 @@ export async function checkMemoryWrite(
       },
       body: JSON.stringify({ content, guild }),
     });
+    // ctx.http.fetch can resolve to a falsy value in this host's sandbox (honcho-client.ts's
+    // requestJson guards the same way). Treat it as a failed check, not a TypeError caught below
+    // — the catch would still fail closed, but with a misleading "cannot read .ok of null" reason.
+    if (!res) {
+      return { allowed: false, category: "gateway_error", reason: "B4 gateway returned no response -- fail-closed" };
+    }
     if (!res.ok) {
       return { allowed: false, category: "gateway_error", reason: `B4 gateway HTTP ${res.status} -- fail-closed` };
     }
