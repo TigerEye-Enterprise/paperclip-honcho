@@ -2,6 +2,12 @@
 
 All notable changes to `@honcho-ai/paperclip-honcho` will be documented in this file.
 
+## [0.1.4] - 2026-09-21
+
+### Fixed
+- Made mapping reconciliation idempotent on Paperclip 2026.916.0 by creating only missing or incomplete workspace, peer, and session mappings. This avoids the host's invalid response when an existing plugin entity is redundantly upserted and unblocks Honcho initialization.
+- Preserved B4 DLP blocked-source evidence across duplicate lifecycle deliveries that contain no new content. A later evaluated source or explicit replay can still clear a resolved false positive.
+
 ## [0.1.3] - 2026-07-09
 
 ### Added
