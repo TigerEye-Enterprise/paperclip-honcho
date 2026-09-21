@@ -1,5 +1,5 @@
 // src/constants.ts
-var PLUGIN_VERSION = "0.1.6";
+var PLUGIN_VERSION = "0.1.7";
 var DEFAULT_WORKSPACE_PREFIX = "paperclip";
 var DEFAULT_JOB_WAIT_TIMEOUT_MS = 15 * 60 * 1e3;
 var SLOT_IDS = {

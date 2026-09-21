@@ -6,7 +6,7 @@ import {
 
 // src/constants.ts
 var PLUGIN_ID = "honcho-ai.paperclip-honcho";
-var PLUGIN_VERSION = "0.1.6";
+var PLUGIN_VERSION = "0.1.7";
 var STATE_NAMESPACE = "honcho";
 var DEFAULT_WORKSPACE_PREFIX = "paperclip";
 var HONCHO_V3_PATH = "/v3";
@@ -1041,6 +1041,7 @@ var HonchoClient = class {
   ensuredWorkspaces = /* @__PURE__ */ new Set();
   ensuredSessions = /* @__PURE__ */ new Set();
   ensuredPeers = /* @__PURE__ */ new Set();
+  ensuredSessionPeerConfigs = /* @__PURE__ */ new Set();
   resolvedWorkspaceIds = /* @__PURE__ */ new Map();
   resolvedSessionIds = /* @__PURE__ */ new Map();
   resolvedAgentPeerIds = /* @__PURE__ */ new Map();
@@ -1251,6 +1252,28 @@ var HonchoClient = class {
         })
       }
     );
+    const peerIds = [...new Set(messages.map((message) => message.peerId))];
+    await Promise.all(
+      peerIds.map((peerId) => this.ensureSessionPeerConfig(companyId, workspaceId, sessionId, peerId))
+    );
+  }
+  async ensureSessionPeerConfig(companyId, workspaceId, sessionId, peerId) {
+    const cacheKey = `${workspaceId}:${sessionId}:${peerId}`;
+    if (this.ensuredSessionPeerConfigs.has(cacheKey)) return;
+    await requestJson(
+      this.ctx,
+      this.config,
+      this.apiKey,
+      `${HONCHO_V3_PATH}/workspaces/${encodeURIComponent(workspaceId)}/sessions/${encodeURIComponent(sessionId)}/peers/${encodeURIComponent(peerId)}/config`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          observe_me: this.config.observe_me,
+          observe_others: this.config.observe_others
+        })
+      }
+    );
+    this.ensuredSessionPeerConfigs.add(cacheKey);
   }
   async listSessionMessageMetadata(companyId, sessionId) {
     const workspaceId = await this.workspaceId(companyId);

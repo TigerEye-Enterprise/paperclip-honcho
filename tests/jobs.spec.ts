@@ -251,6 +251,38 @@ describe("honcho memory jobs", () => {
     ]));
   });
 
+  it("appending messages sets session-peer observe_others config for every distinct sender, once per session/peer pair", async () => {
+    const { requests } = installFetchMock();
+    const harness = createHonchoHarness();
+
+    await plugin.definition.setup(harness.ctx);
+    await scanMigrationSources(harness.ctx, "co_1");
+    await importMigrationPreview(harness.ctx, "co_1");
+
+    const configRequests = requestsMatching(requests, "/peers/").filter(
+      (request) => request.method === "PUT" && request.url.endsWith("/config"),
+    );
+    expect(configRequests.length).toBeGreaterThan(0);
+    for (const request of configRequests) {
+      expect(request.body).toEqual({ observe_me: expect.any(Boolean), observe_others: expect.any(Boolean) });
+    }
+
+    const configuredPeerIds = configRequests.map((request) => {
+      const match = request.url.match(/\/peers\/([^/]+)\/config$/);
+      return match ? decodeURIComponent(match[1] ?? "") : null;
+    });
+    expect(configuredPeerIds).toEqual(expect.arrayContaining(["user_user_1", firstAgentPeerId]));
+
+    // Once-per-session-peer-pair: re-running the same import must not re-PUT config for a
+    // peer/session pair already configured in this worker-process lifetime.
+    const countBefore = configRequests.length;
+    await importMigrationPreview(harness.ctx, "co_1");
+    const configRequestsAfter = requestsMatching(requests, "/peers/").filter(
+      (request) => request.method === "PUT" && request.url.endsWith("/config"),
+    );
+    expect(configRequestsAfter.length).toBe(countBefore);
+  });
+
   it("migration-import skips candidates already present in the Honcho session and backfills the ledger", async () => {
     const { requests } = installFetchMock({
       existingSessionMessages: {

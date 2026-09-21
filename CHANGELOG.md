@@ -2,6 +2,19 @@
 
 All notable changes to `@honcho-ai/paperclip-honcho` will be documented in this file.
 
+## [0.1.7] - 2026-09-21
+
+### Fixed
+- Posting a message from a peer implicitly creates that peer's session-level `session_peer` row on
+  the Honcho server with no configuration at all (`observe_me`/`observe_others` both null),
+  regardless of the peer's own default -- the plugin's own `observe_me`/`observe_others` config was
+  never applied at the session-membership level, only at peer creation. `appendMessagesToSession`
+  now explicitly sets `PUT .../sessions/{id}/peers/{id}/config` once per session/peer pair for every
+  distinct sender in a message batch, so every peer that ever speaks in a session carries the
+  plugin's configuration going forward. Measured live on ax41: 48 company-workspace + 130 devex
+  session_peer rows were unset for exactly this reason; corrected there via the same API, and this
+  closes the gap for all future sessions. TE-b3cu.
+
 ## [0.1.6] - 2026-09-21
 
 ### Fixed
