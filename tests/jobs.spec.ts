@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { peerIdForAgent, workspaceIdForCompany } from "../src/ids.js";
+import { peerIdForAgent, peerIdForUser, workspaceIdForCompany } from "../src/ids.js";
 import { importMigrationPreview, scanMigrationSources, setMigrationCandidatesLoaderForTests } from "../src/sync.js";
 import plugin from "../src/worker.js";
 import { createHonchoHarness, installFetchMock, requestsMatching } from "./helpers.js";
@@ -679,5 +679,36 @@ describe("honcho memory jobs", () => {
       initializationStatus: "complete",
       lastError: null,
     });
+  });
+
+  // TE-b3cu: ensureAgentPeer always passed observe_me/observe_others (the plugin's own
+  // config) as the peer's configuration; ensureUserPeer never did, so a human user peer
+  // was created with NO configuration object at all instead of inheriting the same
+  // default. Measured live on ax41: every agent peer in the company workspace carried an
+  // explicit configuration, the human user peer carried none. This is the regression test
+  // for that gap -- it fails RED against the pre-fix ensureUserPeer (no configuration key
+  // in the request body at all) and passes GREEN once the peer body carries the same
+  // observe_me/observe_others shape ensureAgentPeer already sends.
+  it("creates the human user peer with the same observe_me/observe_others configuration as an agent peer", async () => {
+    const { requests } = installFetchMock();
+    const harness = createHonchoHarness();
+
+    await plugin.definition.setup(harness.ctx);
+    await harness.runJob("initialize-memory");
+
+    const userPeerId = peerIdForUser("user_1");
+    const userPeerRequest = requestsMatching(requests, "/peers").find(
+      (request) => request.method === "POST" && request.body?.id === userPeerId,
+    );
+    expect(userPeerRequest).toBeDefined();
+    expect(userPeerRequest?.body?.configuration).toMatchObject({
+      observe_me: expect.any(Boolean),
+      observe_others: expect.any(Boolean),
+    });
+
+    const agentPeerRequest = requestsMatching(requests, "/peers").find(
+      (request) => request.method === "POST" && request.body?.id === firstAgentPeerId,
+    );
+    expect(agentPeerRequest?.body?.configuration).toEqual(userPeerRequest?.body?.configuration);
   });
 });

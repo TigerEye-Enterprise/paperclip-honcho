@@ -2,6 +2,14 @@
 
 All notable changes to `@honcho-ai/paperclip-honcho` will be documented in this file.
 
+## [0.1.6] - 2026-09-21
+
+### Fixed
+- `ensureUserPeer` never passed a `configuration` object at all, unlike `ensureAgentPeer`, which
+  already sends `{observe_me, observe_others}` from the plugin's own config. A human user peer was
+  therefore created with no configuration -- not even inheriting the plugin default -- rather than
+  the same shape every agent peer gets. TE-b3cu.
+
 ## [0.1.5] - 2026-09-21
 
 ### Fixed
