@@ -174,6 +174,7 @@ export class HonchoClient {
   private readonly ensuredWorkspaces = new Set<string>();
   private readonly ensuredSessions = new Set<string>();
   private readonly ensuredPeers = new Set<string>();
+  private readonly ensuredSessionPeerConfigs = new Set<string>();
   private readonly resolvedWorkspaceIds = new Map<string, string>();
   private readonly resolvedSessionIds = new Map<string, string>();
   private readonly resolvedAgentPeerIds = new Map<string, string>();
@@ -414,6 +415,39 @@ export class HonchoClient {
         }),
       },
     );
+    // TE-b3cu: posting a message from a peer implicitly creates that peer's session_peer
+    // row on the server with NO configuration (observe_me/observe_others both null),
+    // regardless of the peer's own default. Explicitly set it once per session/peer pair
+    // so every peer that ever speaks in a session picks up observe_others going forward,
+    // not just peers added some other way.
+    const peerIds = [...new Set(messages.map((message) => message.peerId))];
+    await Promise.all(
+      peerIds.map((peerId) => this.ensureSessionPeerConfig(companyId, workspaceId, sessionId, peerId)),
+    );
+  }
+
+  private async ensureSessionPeerConfig(
+    companyId: string,
+    workspaceId: string,
+    sessionId: string,
+    peerId: string,
+  ): Promise<void> {
+    const cacheKey = `${workspaceId}:${sessionId}:${peerId}`;
+    if (this.ensuredSessionPeerConfigs.has(cacheKey)) return;
+    await requestJson(
+      this.ctx,
+      this.config,
+      this.apiKey,
+      `${HONCHO_V3_PATH}/workspaces/${encodeURIComponent(workspaceId)}/sessions/${encodeURIComponent(sessionId)}/peers/${encodeURIComponent(peerId)}/config`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          observe_me: this.config.observe_me,
+          observe_others: this.config.observe_others,
+        }),
+      },
+    );
+    this.ensuredSessionPeerConfigs.add(cacheKey);
   }
 
   async listSessionMessageMetadata(
