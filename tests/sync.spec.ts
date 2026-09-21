@@ -523,6 +523,26 @@ describe("honcho sync", () => {
     expect(requests.some((request) => JSON.stringify(request.body).includes("SEC-1"))).toBe(true);
   });
 
+  it("reconciles existing topology without re-upserting immutable mapping rows", async () => {
+    installFetchMock();
+    const harness = createHonchoHarness();
+
+    await plugin.definition.setup(harness.ctx);
+    await harness.performAction(ACTION_KEYS.initializeMemoryForCompany, { companyId: "co_1" });
+
+    const originalUpsert = harness.ctx.entities.upsert;
+    let repeatedUpserts = 0;
+    harness.ctx.entities.upsert = async (...args) => {
+      repeatedUpserts += 1;
+      return await originalUpsert(...args);
+    };
+
+    await expect(
+      harness.performAction(ACTION_KEYS.initializeMemoryForCompany, { companyId: "co_1" }),
+    ).resolves.toMatchObject({ ok: true, companyId: "co_1" });
+    expect(repeatedUpserts).toBe(0);
+  });
+
   // TE-4ywqwk: the sync path must actually CALL the B4 gateway when configured, and block a comment
   // it denies. The gate is a no-op when dlpGatewayUrl is unset (all other tests in this file cover
   // that default path already), so these tests explicitly configure it.
@@ -610,6 +630,32 @@ describe("honcho sync", () => {
       stateKey: "issue-sync-status",
     }) as Record<string, unknown>;
     // Every comment on the fixture issue was blocked, so all of them must be named as withheld.
+    expect(state.dlpBlockedCommentIds).toEqual(expect.arrayContaining(["c_1", "c_2"]));
+  });
+
+  it("retains blocked ids when a duplicate lifecycle delivery has no new content", async () => {
+    installFetchMock({
+      dlpGatewayResponse: { allowed: false, reason: "blocked: high-sensitivity entity GUILD_CREDENTIAL", category: "GUILD_CREDENTIAL" },
+    });
+    const harness = createHonchoHarness({
+      config: { dlpGatewayUrl: "http://dlp-check-plugin-reach:8710", dlpGatewayToken: "dlp-t" },
+    });
+    const event = {
+      entityId: "iss_1",
+      entityType: "issue",
+      companyId: "co_1",
+    } as const;
+
+    await plugin.definition.setup(harness.ctx);
+    await harness.emit("issue.comment.created", { commentId: "c_2" }, event);
+    await harness.emit("issue.comment.created", { commentId: "c_2" }, event);
+
+    const state = harness.getState({
+      scopeKind: "issue",
+      scopeId: "iss_1",
+      namespace: "honcho",
+      stateKey: "issue-sync-status",
+    }) as Record<string, unknown>;
     expect(state.dlpBlockedCommentIds).toEqual(expect.arrayContaining(["c_1", "c_2"]));
   });
 

@@ -6,7 +6,7 @@ import {
 
 // src/constants.ts
 var PLUGIN_ID = "honcho-ai.paperclip-honcho";
-var PLUGIN_VERSION = "0.1.3";
+var PLUGIN_VERSION = "0.1.4";
 var STATE_NAMESPACE = "honcho";
 var DEFAULT_WORKSPACE_PREFIX = "paperclip";
 var HONCHO_V3_PATH = "/v3";
@@ -3103,8 +3103,12 @@ async function syncIssue(ctx, issueId, companyId, options = {}) {
         latestContextFetchedAt: (/* @__PURE__ */ new Date()).toISOString(),
         // Always written, including the empty case, so a sync that clears a previous block does
         // not leave a stale "still withheld" record behind.
-        dlpBlockedCommentIds: [...dlp.blockedCommentIds],
-        dlpBlockedDocumentKeys: [...dlp.blockedDocumentKeys]
+        // A duplicate/no-op lifecycle delivery must not erase the proof that an
+        // earlier delivery was withheld. Replace the record only when this pass
+        // actually evaluated that source type; replay remains the recovery path
+        // that can deliberately clear a false positive.
+        dlpBlockedCommentIds: commentMessages.length > 0 ? [...dlp.blockedCommentIds] : [...status.dlpBlockedCommentIds ?? []],
+        dlpBlockedDocumentKeys: documentMessages.length > 0 ? [...dlp.blockedDocumentKeys] : [...status.dlpBlockedDocumentKeys ?? []]
       });
       await patchCompanySyncStatus(ctx, companyId, {
         connectionStatus: "connected",
@@ -3245,7 +3249,11 @@ async function repairMappings(ctx, companyId) {
   const company = await ctx.companies.get(companyId);
   const client = await createHonchoClient({ ctx, config });
   let repaired = 0;
-  await upsertWorkspaceMapping(ctx, company, companyId, config.workspacePrefix);
+  const workspaceMapping = await getWorkspaceMappingRecord(ctx, companyId);
+  const mappedWorkspaceId = typeof workspaceMapping?.data.workspaceId === "string" ? workspaceMapping.data.workspaceId.trim() : "";
+  if (!mappedWorkspaceId) {
+    await upsertWorkspaceMapping(ctx, company, companyId, config.workspacePrefix);
+  }
   const workspaceId = await client.ensureCompanyWorkspace(companyId, company);
   repaired += 1;
   const bridgeResult = await syncAgentRuntimeMcpBridge(companyId, config).catch(
@@ -3259,14 +3267,22 @@ async function repairMappings(ctx, companyId) {
   }
   const agents = await listCompanyAgents(ctx, companyId);
   for (const agent of agents) {
+    const mapping = await getAgentPeerMappingRecord(ctx, companyId, agent.id);
+    const mappedPeerId = typeof mapping?.data.peerId === "string" ? mapping.data.peerId.trim() : "";
     await client.ensureAgentPeer(companyId, agent);
-    await upsertAgentPeerMapping(ctx, companyId, agent);
+    if (!mappedPeerId) {
+      await upsertAgentPeerMapping(ctx, companyId, agent);
+    }
     repaired += 1;
   }
   const issues = await listCompanyIssues(ctx, companyId);
   for (const issue of issues) {
+    const mapping = await getSessionMappingRecord(ctx, issue.id);
+    const mappedSessionId = typeof mapping?.data.sessionId === "string" ? mapping.data.sessionId.trim() : "";
     await client.ensureIssueSession(issue, company);
-    await upsertSessionMapping(ctx, issue, workspaceId);
+    if (!mappedSessionId) {
+      await upsertSessionMapping(ctx, issue, workspaceId);
+    }
     repaired += 1;
   }
   await patchCompanySyncStatus(ctx, companyId, {
