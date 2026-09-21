@@ -9,7 +9,7 @@ import {
 
 // src/constants.ts
 var PLUGIN_ID = "honcho-ai.paperclip-honcho";
-var PLUGIN_VERSION = "0.1.5";
+var PLUGIN_VERSION = "0.1.6";
 var STATE_NAMESPACE = "honcho";
 var DEFAULT_WORKSPACE_PREFIX = "paperclip";
 var HONCHO_V3_PATH = "/v3";
@@ -1169,6 +1169,10 @@ var HonchoClient = class {
         company_id: companyId,
         user_id: userId,
         ...metadata
+      },
+      {
+        observe_me: this.config.observe_me,
+        observe_others: this.config.observe_others
       }
     );
   }

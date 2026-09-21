@@ -313,6 +313,10 @@ export class HonchoClient {
     userId: string,
     metadata?: Record<string, unknown>,
   ): Promise<string> {
+    // TE-b3cu: ensureAgentPeer already passes observe_me/observe_others (this.config) as the
+    // peer's configuration; this path never did, so a human user peer was created with NO
+    // configuration object at all rather than inheriting the plugin's own default. Same
+    // config source, same shape, for parity across every peer kind this client creates.
     return await this.ensurePeer(
       companyId,
       peerIdForUser(userId),
@@ -320,6 +324,10 @@ export class HonchoClient {
         company_id: companyId,
         user_id: userId,
         ...metadata,
+      },
+      {
+        observe_me: this.config.observe_me,
+        observe_others: this.config.observe_others,
       },
     );
   }
