@@ -6,7 +6,7 @@ import {
 
 // src/constants.ts
 var PLUGIN_ID = "honcho-ai.paperclip-honcho";
-var PLUGIN_VERSION = "0.1.4";
+var PLUGIN_VERSION = "0.1.5";
 var STATE_NAMESPACE = "honcho";
 var DEFAULT_WORKSPACE_PREFIX = "paperclip";
 var HONCHO_V3_PATH = "/v3";
@@ -3471,9 +3471,9 @@ var plugin = definePlugin({
     });
     ctx.actions.register(ACTION_KEYS.initializeMemoryForCompany, async (params) => {
       const companyId = requireString(params.companyId, "companyId");
-      await repairMappings(ctx, companyId);
+      const report = await initializeMemory(ctx, companyId);
       await setPreparedJobCompany(ctx, JOB_KEYS.initializeMemory, companyId);
-      return { ok: true, companyId };
+      return { ok: true, initialized: true, companyId, report };
     });
     ctx.actions.register(ACTION_KEYS.probePromptContext, async (params) => {
       const companyId = requireString(params.companyId, "companyId");

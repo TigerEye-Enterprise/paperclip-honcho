@@ -533,7 +533,9 @@ describe("honcho sync", () => {
     const originalUpsert = harness.ctx.entities.upsert;
     let repeatedUpserts = 0;
     harness.ctx.entities.upsert = async (...args) => {
-      repeatedUpserts += 1;
+      if (["honcho-workspace-mapping", "honcho-peer-mapping", "honcho-session-mapping"].includes(args[0].entityType)) {
+        repeatedUpserts += 1;
+      }
       return await originalUpsert(...args);
     };
 

@@ -301,9 +301,9 @@ describe("HonchoSettingsPage", () => {
     expect(configPosts).toHaveLength(1);
   });
 
-  it("runs activation steps in order and reports progress", async () => {
+  it("runs activation in the scoped action and skips the legacy unscoped job", async () => {
     const triggeredJobs: string[] = [];
-    const initializeAction = vi.fn(async () => ({ ok: true }));
+    const initializeAction = vi.fn(async () => ({ ok: true, initialized: true }));
     let resolveValidation: () => void = () => {
       throw new Error("Validation resolver was not initialized");
     };
@@ -344,9 +344,7 @@ describe("HonchoSettingsPage", () => {
 
     expect(configTestIndex).toBeGreaterThan(-1);
     expect(initializeIndex).toBeGreaterThan(0);
-    expect(triggeredJobs).toEqual([
-      "/api/plugins/honcho-ai.paperclip-honcho/jobs/job_init/trigger",
-    ]);
+    expect(triggeredJobs).toEqual([]);
     expect(initializeAction).toHaveBeenCalledWith({ companyId: "co_1" });
   });
 

@@ -2,6 +2,11 @@
 
 All notable changes to `@honcho-ai/paperclip-honcho` will be documented in this file.
 
+## [0.1.5] - 2026-09-21
+
+### Fixed
+- Run company memory initialization inside the company-scoped action on Paperclip 2026.916.0. The settings UI now skips the legacy job dispatch when that action completes, avoiding the host's unscoped-job rejection of company configuration reads.
+
 ## [0.1.4] - 2026-09-21
 
 ### Fixed

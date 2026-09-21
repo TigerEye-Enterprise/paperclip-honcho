@@ -23,7 +23,6 @@ import {
   loadMigrationJobStatusData,
   loadMigrationPreviewData,
   probePromptContext,
-  repairMappings,
   replayIssue,
   searchMemory,
   syncIssue,
@@ -120,17 +119,13 @@ const plugin = definePlugin({
 
     ctx.actions.register(ACTION_KEYS.initializeMemoryForCompany, async (params) => {
       const companyId = requireString(params.companyId, "companyId");
-      // Ensure workspace/peer/session mappings here, inside the action call,
-      // rather than only inside the initialize-memory job. Paperclip's job dispatch
-      // (runJob) never registers a company-scoped invocation with the host
-      // (unlike performAction), so a job-only fix is racy: any per-company
-      // host call it makes only succeeds if nothing else happens to be
-      // concurrently active in this plugin's worker process at that instant.
-      // Actions are properly scoped, so doing the critical repair here makes
-      // it reliable regardless of what else the worker is doing.
-      await repairMappings(ctx, companyId);
+      // Paperclip 2026.916.0 dispatches plugin jobs without company scope, so a
+      // job cannot read company-scoped config. Complete initialization inside
+      // this properly scoped action; the UI recognizes `initialized: true` and
+      // does not take the legacy unscoped job path.
+      const report = await initializeMemory(ctx, companyId);
       await setPreparedJobCompany(ctx, JOB_KEYS.initializeMemory, companyId);
-      return { ok: true, companyId };
+      return { ok: true, initialized: true, companyId, report };
     });
 
     ctx.actions.register(ACTION_KEYS.probePromptContext, async (params) => {

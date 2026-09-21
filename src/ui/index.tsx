@@ -655,7 +655,11 @@ export function HonchoSettingsPage({ context }: PluginSettingsPageProps) {
       if (!companyId) {
         throw new Error("companyId is required");
       }
-      await initializeMemoryForCompany({ companyId });
+      const result = await initializeMemoryForCompany({ companyId }) as { initialized?: boolean } | null;
+      if (result?.initialized) {
+        refreshActivationData();
+        return;
+      }
     }
     await jobs.triggerByKey(jobKey);
     const timeoutAt = Date.now() + DEFAULT_JOB_WAIT_TIMEOUT_MS;
